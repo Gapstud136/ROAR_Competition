@@ -19,7 +19,7 @@ import atexit
 
 # from scipy.interpolate import interp1d
 
-useDebug = False
+useDebug = True
 useDebugPrinting = False
 debugData = {}
 dbg_carLocations = []
