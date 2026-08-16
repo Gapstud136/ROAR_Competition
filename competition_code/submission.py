@@ -28,7 +28,7 @@ useDebugPrinting = False
 FIX_RESPAWN_RESET = True
 # B: derive current_section from the waypoint index range instead of the
 #    +/-2 proximity window, which can be skipped at high speed.
-FIX_SECTION_RANGE = True
+FIX_SECTION_RANGE = False
 # distance in metres that counts as a teleport rather than normal motion
 RESPAWN_JUMP_M = 20.0
 # ---------------------------------------------------------------------------
