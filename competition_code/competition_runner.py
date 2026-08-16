@@ -238,6 +238,15 @@ async def main():
         max_seconds=5000,
         enable_visualization=True
     )
+    try:
+        evaluation_result = await evaluate_solution(
+            world,
+            RoarCompetitionSolution,
+            max_seconds=5000,
+            enable_visualization=True
+        )
+    finally:
+        world.set_asynchronous(True)
     if evaluation_result is not None:
         print("Solution finished in {} seconds".format(evaluation_result["elapsed_time"]))
     else:
