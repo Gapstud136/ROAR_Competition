@@ -8,6 +8,36 @@ from SpeedData import SpeedData
 import roar_py_interface
 
 
+# ===== TRAIL BRAKING =======================================================
+# The stock controller uses bang-bang braking: brake is either 0.0 or 1.0.
+# Under full braking essentially the whole grip budget goes to deceleration,
+# so the car cannot turn while slowing and must finish braking before turn-in.
+#
+# Trail braking bleeds brake pressure off as the car approaches its corner
+# speed, freeing grip for cornering and allowing a later, deeper entry.
+#
+# Brake pressure is scaled by how much excess speed is left to shed:
+#     excess = current_speed / recommended_speed_now - 1
+#     brake  = clamp(excess / TRAIL_GAIN, TRAIL_BRAKE_MIN, 1.0)
+#
+# With TRAIL_GAIN = 0.12: 12% over target -> full brake, 6% over -> 0.5,
+# at target -> TRAIL_BRAKE_MIN. Larger GAIN = softer braking overall.
+TRAIL_BRAKING = True
+TRAIL_GAIN = 0.12
+TRAIL_BRAKE_MIN = 0.45
+
+# Restrict to specific sections while testing, e.g. {5} or {1, 2}.
+# None means apply everywhere.
+TRAIL_SECTIONS = None
+
+# The "NEW stuff" block in run_step() feeds throttle in during braking to soften
+# deceleration. That fights the brakes with the engine. With trail braking we
+# reduce brake pressure directly instead, so applying both would under-slow the
+# car. When True, the throttle boost is skipped on ticks where brake < 0.95.
+TRAIL_SUPPRESS_THROTTLE_BOOST = True
+# ===========================================================================
+
+
 def distance_p_to_p(
     p1: roar_py_interface.RoarPyWaypoint, p2: roar_py_interface.RoarPyWaypoint
 ):
@@ -45,6 +75,7 @@ class ThrottleController:
         self.tick_counter = 0
         self.previous_speed = 1.0
         self.brake_ticks = 0
+        self._section = 0
         self.prev_brake = deque([0]*20, maxlen=20)
         self.prev_throttle = deque([0]*20, maxlen=20)
         self.prev_locations = deque(maxlen=20)
@@ -60,6 +91,7 @@ class ThrottleController:
         self, waypoints, current_location, current_speed, current_section, additional_waypoints
     ) -> Tuple[float, float, int]:
         self.tick_counter += 1
+        self._section = current_section   # for trail_brake_value()
         self.current_location_idx = new_location_index(
             current_location, self.current_location_idx, self.location_and_radius)
 
@@ -83,29 +115,33 @@ class ThrottleController:
         self.previous_speed = current_speed
 
         # ------- NEW stuff ----------
+        # With trail braking, brake pressure is already reduced; also feeding
+        # throttle in would under-decelerate the car into the corner.
+        boost_ok = not (TRAIL_BRAKING and TRAIL_SUPPRESS_THROTTLE_BOOST
+                        and brake > 0.001 and brake < 0.95)
         br_count = self.num_ticks_with_brake_on()
         speed_excess = current_speed - speed_data.recommended_speed_now
         if current_section == 3:
-            if 0 < self.brake_ticks and self.brake_ticks < 5 and speed_excess < 8 and br_count > 5:
+            if boost_ok and 0 < self.brake_ticks and self.brake_ticks < 5 and speed_excess < 8 and br_count > 5:
                 throttle = 0.2
         elif current_section in [0, 1]:
-            if 0 < self.brake_ticks and self.brake_ticks < 5 and speed_excess < 12 and br_count > 3:
+            if boost_ok and 0 < self.brake_ticks and self.brake_ticks < 5 and speed_excess < 12 and br_count > 3:
                 prev_throttle = max(0.3, self.prev_throttle[0])
                 throttle = prev_throttle + 0.05
         elif current_section == 4:
-            if 0 < self.brake_ticks and self.brake_ticks < 5 and speed_excess < 12 and br_count > 3:
+            if boost_ok and 0 < self.brake_ticks and self.brake_ticks < 5 and speed_excess < 12 and br_count > 3:
                 prev_throttle = max(0.3, self.prev_throttle[0])
                 throttle = prev_throttle + 0.05
         elif current_section == 6:
-            if 0 < self.brake_ticks and self.brake_ticks < 4 and speed_excess < 8 and br_count > 4:
+            if boost_ok and 0 < self.brake_ticks and self.brake_ticks < 4 and speed_excess < 8 and br_count > 4:
                 # prev_throttle = max(0.27, self.prev_throttle[0])
                 # throttle = prev_throttle + 0.03
                 throttle = 0.35
         elif current_section == 9 and current_speed < 160:
-            if 0 < self.brake_ticks and self.brake_ticks < 8 and speed_excess < 20 and br_count > 4:
+            if boost_ok and 0 < self.brake_ticks and self.brake_ticks < 8 and speed_excess < 20 and br_count > 4:
                 prev_throttle = max(0.3, self.prev_throttle[0])
                 throttle = prev_throttle + 0.06
-        elif 0 < self.brake_ticks and self.brake_ticks < 5 and speed_excess < 8 and br_count > 5:
+        elif boost_ok and 0 < self.brake_ticks and self.brake_ticks < 5 and speed_excess < 8 and br_count > 5:
             prev_throttle = max(0.3, self.prev_throttle[0])
             throttle = prev_throttle + 0.03
 
@@ -202,6 +238,24 @@ class ThrottleController:
 
         return throttle, brake, update, debug_str
 
+    def trail_brake_value(self, speed_data: SpeedData, current_section: int) -> float:
+        """
+        Brake pressure for this tick, in [TRAIL_BRAKE_MIN, 1.0].
+
+        Returns 1.0 (stock bang-bang behaviour) when trail braking is disabled
+        or the current section is excluded, so the flag is a true A/B switch.
+        """
+        if not TRAIL_BRAKING:
+            return 1.0
+        if TRAIL_SECTIONS is not None and current_section not in TRAIL_SECTIONS:
+            return 1.0
+
+        rec = max(speed_data.recommended_speed_now, 1.0)
+        excess = (speed_data.current_speed / rec) - 1.0
+        if excess <= 0:
+            return TRAIL_BRAKE_MIN
+        return float(min(1.0, max(TRAIL_BRAKE_MIN, excess / TRAIL_GAIN)))
+
     def speed_data_to_throttle_and_brake(self, speed_data: SpeedData):
         """
         Converts speed data into throttle and brake values
@@ -241,7 +295,7 @@ class ThrottleController:
                         + " brake: counter "
                         + str(self.brake_ticks)
                     )
-                    return -1, 1
+                    return -1, self.trail_brake_value(speed_data, self._section)
 
                 # if speed is not decreasing fast, hit the brake.
                 if self.brake_ticks <= 0 and speed_change < 2.5:
@@ -256,7 +310,7 @@ class ThrottleController:
                         + " brake: initiate counter "
                         + str(self.brake_ticks)
                     )
-                    return -1, 1
+                    return -1, self.trail_brake_value(speed_data, self._section)
 
                 else:
                     # speed is already dropping fast, ok to throttle because the effect of throttle is delayed
@@ -507,8 +561,6 @@ class ThrottleController:
             mu = 3.3
         if current_section == 4:
             mu = 3.05
-        if current_section == 5:
-            mu = 3.0
         if current_section == 6:
             mu = 3.3
         if current_section == 8:
