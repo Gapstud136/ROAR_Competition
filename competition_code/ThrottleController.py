@@ -28,7 +28,7 @@ TRAIL_BRAKE_MIN = 0.45
 
 # Restrict to specific sections while testing, e.g. {5} or {1, 2}.
 # None means apply everywhere.
-TRAIL_SECTIONS = None
+TRAIL_SECTIONS = {5}
 
 # The "NEW stuff" block in run_step() feeds throttle in during braking to soften
 # deceleration. That fights the brakes with the engine. With trail braking we
