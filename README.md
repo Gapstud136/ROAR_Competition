@@ -16,7 +16,7 @@ This solution uses code from University High School's Spring 2026 first-place su
 That solution was itself built on the pure-pursuit baseline provided by the
 competition, which completed three laps in 321.0s. The lineage is:
 
-| Stage | Time | Files changed |
+| Stage | Best Time | Files changed |
 |---|---|---|
 | Competition-provided pure pursuit baseline | 321.0s | — |
 | University HS, Spring 2026 winner | 320.4s | `ThrottleController.py`, `submission.py` |
